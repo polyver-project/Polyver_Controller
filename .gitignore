@@ -30,3 +30,11 @@
 *.exe
 *.out
 *.app
+
+# Mac
+.DS_Store
+
+# Other
+.pio/*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
