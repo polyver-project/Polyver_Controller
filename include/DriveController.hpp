@@ -11,90 +11,102 @@
  * 
  */
 #include <Arduino.h>
-
-#include "DualTB9051FTGMotorShield.h"
-#include "Encoder.h"
+#include <DualTB9051FTGMotorShield.h>
+#include <Encoder.h>
+#include <AutoPID.h>
 
 // ------- Hardware Config ---------
 // M2 is left motor
-#define LEFT_ENCODER_PIN_A A2
-#define LEFT_ENCODER_PIN_B A3
+#define DRIVE_LEFT_PIN_A 18
+#define DRIVE_LEFT_PIN_B 19
 
 // M1 is right motor 
-#define RIGHT_ENCODER_PIN_A 3
-#define RIGHT_ENCODER_PIN_B 5
+#define DRIVE_RIGHT_PIN_A 20
+#define DRIVE_RIGHT_PIN_B 21
 
-#define IN_CENTER_TO_WHEEL 3.0625f    // In inches
+#define DRIVE_IN_CENTER_TO_WHEEL 3.0625    // In inches
 
-#define IN_PER_ENCODER 0.2f
+#define DRIVE_IN_PER_ENCODER 0.0064f
 
 
 // ------- Software Config ---------
-#define PATH_BUFFER_SIZE 1000
+#define PATH_BUFFER_SIZE 10
 
 #define MAX_MILLIAMPS 1000.0f
+#define MAX_SPEED     300
+#define MIN_SPEED     0
 
-#define KP_LEFT 0
-#define KD_LEFT 0
+#define KP_LEFT 1.0
+#define KI_LEFT 1.0
+#define KD_LEFT 0.0
 
-#define KP_RIGHT 0
-#define KD_RIGHT 0
+#define KP_RIGHT 1.0
+#define KI_RIGHT 1.0
+#define KD_RIGHT 0.0
 
-#define PID_DEAD_ZONE 5
+#define SPEED_DEAD_ZONE 50              // Cutoff at distance: kP / SPEED_DEAD_ZONE = 1 in
+#define ERROR_DEAD_ZONE 0.1             // Inches
 
+// ---- Typedefs ---------------------------
+/** @brief DriveController path point */
+typedef struct PolarPoint {
+    double r_inches;
+    double rads;
+} PolarPoint;
 
 /** @brief Polyver drivetrain kinematic controller with smart handling of motion */
 class DriveController {
-    
     public:
-        DriveController();
-        ~DriveController();
+        // DriveController();
+        // ~DriveController();
 
-        /** @brief DriveController path point */
-        typedef struct PolarPoint {
-            int32_t r_inches;
-            int32_t rads;
-        } PolarPoint;
+        static void Init();
 
-        /** @brief Adds point to path 
+        /** @brief Adds point to path. Note: Robot faces Y-axis
          * @param delta_x The delta offset to desired point
          * @param delta_y The delta offset to desired point
         */
-        void Move(int8_t delta_x, int8_t delta_y);
+        static void Move(int8_t delta_x, int8_t delta_y);
 
         /** @brief Update motor output via PID controller, to be called often */
-        void UpdateOutput();
+        static void UpdateOutput();
 
         /** @brief Calculates next steps and new setpoints, can be called slower */
-        void CalculateNextPath();
+        static bool CalculateNextPath();
 
-        // -------- DEBUG TEMPORARY ----------
-        int32_t ReadLeft() {
-            return leftEncoder.read();
-        }
-        
-        int32_t ReadRight() {
-            return rightEncoder.read();
-        }
-        
-        void SetSpeed(int8_t left, int8_t right) {
-            driveMD.setSpeeds(right, left);
-        }
+        /** @brief Disable motors and place into standby mode */
+        static void Kill();
 
-    private:
-        DualTB9051FTGMotorShield driveMD; 
-        Encoder leftEncoder;
-        Encoder rightEncoder;
-        
-        // TODO: Implement circular buffer logic
-        PolarPoint path[PATH_BUFFER_SIZE];              // path robot will follow
-        uint32_t path_head;
-        uint32_t path_tail;
+    // private:
+        // ---- PID ------------------------
+        static double* pid_left_input;
+        static double* pid_left_setpoint;
+        static double* pid_left_output;
 
-        int8_t leftOutput;
-        int8_t rightOutput;
+        static double* pid_right_input;
+        static double* pid_right_setpoint;
+        static double* pid_right_output;
+
+        // static int16_t right_output;
+
+        // static uint16_t over_power_accumilator;
+        // static float I_left_accumilator;
+        // static float I_right_accumilator;
+
+        static AutoPID pid_left;
+        static AutoPID pid_right;
+        
+        // ---- Path controll data ---------
+        static PolarPoint* path;
+        static uint32_t path_head;     // Points to current executing position
+        static uint32_t path_tail;     // Points to last valid position
+
+        // ---- Polulu motor driver --------
+        static DualTB9051FTGMotorShield driveMD; 
+
+        // ---- Encoders -------------------
+        static Encoder leftEncoder;
+        static Encoder rightEncoder;
 };
-
-
 
 #endif
