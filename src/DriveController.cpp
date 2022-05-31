@@ -13,6 +13,9 @@
 
 
 // ---- Static Initializations -------------
+uint8_t DriveController::drive_mode = DRIVE_MODE_MANUAL;
+unsigned long DriveController::last_manual_speed_update_ms = 0;
+
 double* DriveController::pid_left_input;
 double* DriveController::pid_left_setpoint;
 double* DriveController::pid_left_output;
@@ -21,40 +24,31 @@ double* DriveController::pid_right_input;
 double* DriveController::pid_right_setpoint;
 double* DriveController::pid_right_output;
 
-AutoPID DriveController::pid_left(
-    DriveController::pid_left_input, 
-    DriveController::pid_left_setpoint,
-    DriveController::pid_left_output,
-    0.0,
-    300.0,
-    KP_LEFT, KI_LEFT, KD_LEFT);
-
-AutoPID DriveController::pid_right( 
-    DriveController::pid_right_input, 
-    DriveController::pid_right_setpoint,
-    DriveController::pid_right_output,
-    0.0, 300.0,
-    KP_RIGHT, KI_RIGHT, KD_RIGHT);
-// int16_t DriveController::left_output = 0;
-// int16_t DriveController::right_output = 0;
-
-// uint16_t DriveController::over_power_accumilator = 1;
-// float DriveController::I_left_accumilator = 0;
-// float DriveController::I_right_accumilator = 0;
+AutoPID* DriveController::pid_left;
+AutoPID* DriveController::pid_right;
 
 PolarPoint* DriveController::path;
 uint32_t DriveController::path_head = 0;
 uint32_t DriveController::path_tail = 0;
 
+unsigned long DriveController::last_irregular_update_ms = 0;
+
+uint16_t DriveController::over_power_accumilator = 1;
+bool DriveController::left_disabled = false;
+bool DriveController::right_disabled = false;
+
 DualTB9051FTGMotorShield DriveController::driveMD;
+int8_t DriveController::left_output = 0;
+int8_t DriveController::right_output = 0;
+
 Encoder DriveController::leftEncoder(DRIVE_LEFT_PIN_A, DRIVE_LEFT_PIN_B);
 Encoder DriveController::rightEncoder(DRIVE_RIGHT_PIN_A, DRIVE_RIGHT_PIN_B);
 
-// ---- Definitions ------------------------
+// ---- Public Methods ---------------------
 void DriveController::Init() {
     //  Shield setup
     driveMD.init();
-    driveMD.flipM1(true);                   // Right wheel inverted
+    driveMD.flipM1(true);
     driveMD.flipM2(false);
 
     // PID setup
@@ -66,8 +60,32 @@ void DriveController::Init() {
     pid_right_setpoint = new double;
     pid_right_output = new double;
 
+    pid_left = new AutoPID(
+        pid_left_input, pid_left_setpoint, pid_left_output,
+        DRIVE_MIN_SPEED, DRIVE_MAX_SPEED,
+        DRIVE_LEFT_KP, DRIVE_LEFT_KI, DRIVE_LEFT_KD
+    );
+
+    pid_right = new AutoPID(
+        pid_right_input, pid_right_setpoint, pid_right_output,
+        DRIVE_MIN_SPEED, DRIVE_MAX_SPEED,
+        DRIVE_RIGHT_KP, DRIVE_RIGHT_KI, DRIVE_RIGHT_KD
+    );
+
+    pid_left->setBangBang(0,0);
+    pid_right->setBangBang(0,0);
+
+    pid_left->setTimeStep(100);
+    pid_right->setTimeStep(100);
+
+    *pid_left_input    = 0;
+    *pid_left_setpoint = 0;
+
+    *pid_right_input    = 0;
+    *pid_right_setpoint = 0;
+
     // Path setup
-    path = new PolarPoint[PATH_BUFFER_SIZE];
+    path = new PolarPoint[DRIVE_PATH_BUFFER_SIZE];
 
     // Inserting a keep position as first path point
     path[0].r_inches = 0;
@@ -75,10 +93,33 @@ void DriveController::Init() {
 }
 
 void DriveController::Kill() {
-    driveMD.disableDrivers();
+    SetLeft(0);
+    SetRight(0);
+    drive_mode = DRIVE_MODE_MANUAL;
+}
+
+void DriveController::ManualMove(int8_t left_speed, int8_t right_speed) {
+    if (drive_mode != DRIVE_MODE_MANUAL) {
+        return;
+    }
+
+    // Update watch dog timer
+    last_manual_speed_update_ms = millis();
+
+    // Set output
+    left_output = left_speed;
+    right_output = right_speed;
 }
 
 void DriveController::Move(int8_t delta_x, int8_t delta_y) {
+    if (drive_mode != DRIVE_MODE_PATH) {
+        return;
+    }
+
+    if (delta_x == 0 && delta_y == 0) {
+        return;
+    }
+
     Serial.print("Adding path x: ");
     Serial.print(delta_x);
     Serial.print(" y: ");
@@ -86,7 +127,7 @@ void DriveController::Move(int8_t delta_x, int8_t delta_y) {
 
     // TODO: Should this return some success code?
     // Buffer full condtions
-    if ((path_tail == PATH_BUFFER_SIZE - 1) && (path_head == 0)) {
+    if ((path_tail == DRIVE_PATH_BUFFER_SIZE - 1) && (path_head == 0)) {
         return;
     } else if (path_tail + 1 == path_head) {
         return;
@@ -102,21 +143,22 @@ void DriveController::Move(int8_t delta_x, int8_t delta_y) {
     Serial.println(r_inches);
     Serial.print("calc rads: ");
     Serial.println(rads);
+    // Serial.println(path_head);
 
-    // Update previous point if connituing in same direction
-    if (rads == 0) {
+    // Update previous point if connituing in same direction, but not holding
+    if (rads == 0 && path[path_head].r_inches != 0) {
         path[path_head].r_inches += r_inches;
         return;
     }
 
     // Adding to path in two moves: turn, move
     // turn
-    path_tail = (path_tail == PATH_BUFFER_SIZE - 1) ? 0 : path_tail + 1;
+    path_tail = (path_tail == DRIVE_PATH_BUFFER_SIZE - 1) ? 0 : path_tail + 1;
     path[path_tail].rads = rads;
     path[path_tail].r_inches = 0;
     
     // move
-    path_tail = (path_tail == PATH_BUFFER_SIZE - 1) ? 0 : path_tail + 1;
+    path_tail = (path_tail == DRIVE_PATH_BUFFER_SIZE - 1) ? 0 : path_tail + 1;
     path[path_tail].r_inches = r_inches;
     path[path_tail].rads = 0;
 
@@ -124,68 +166,52 @@ void DriveController::Move(int8_t delta_x, int8_t delta_y) {
     Serial.println(path_tail);
 }
 
-void DriveController::UpdateOutput() {
-    // Serial.println("Updating path: ");
-    if (path[path_head].r_inches == 0 && path[path_head].rads == 0) {
-        driveMD.disableDrivers();
-        return;
+void DriveController::StrictUpdate() {
+
+    switch (drive_mode) {
+        case DRIVE_MODE_MANUAL:
+            // Watch dog timer
+            if ((millis() - last_manual_speed_update_ms) > DRIVE_MANUAL_TIMEOUT_MS) {
+                left_output = 0;
+                right_output = 0;
+            }
+            break;
+        
+        case DRIVE_MODE_PATH: 
+            // Serial.println("Updating path: ");
+            if (path[path_head].r_inches == 0 && path[path_head].rads == 0) {
+                left_output = 0;
+                right_output = 0; 
+            } else {
+                // Get encoder positions
+                *pid_left_input = leftEncoder.read();
+                *pid_right_input = rightEncoder.read();
+
+                // Calculate setpoint
+                // Turning
+                if (path[path_head].r_inches == 0) {
+                    *pid_left_setpoint = -1.0 * path[path_head].rads * DRIVE_IN_CENTER_TO_WHEEL * DRIVE_TICKS_PER_IN;
+                    *pid_right_setpoint = path[path_head].rads * DRIVE_IN_CENTER_TO_WHEEL * DRIVE_TICKS_PER_IN;
+                } else {
+                    *pid_left_setpoint = path[path_head].r_inches * DRIVE_TICKS_PER_IN;
+                    *pid_right_setpoint = path[path_head].r_inches * DRIVE_TICKS_PER_IN;
+                }
+
+                // Update output
+                pid_left->run();
+                pid_right->run();
+                
+                // Set output
+                left_output = (pid_left->atSetPoint(DRIVE_SETPOINT_DEAD_ZONE)) ? 0 : *pid_left_output;
+                right_output = (pid_right->atSetPoint(DRIVE_SETPOINT_DEAD_ZONE)) ? 0 : *pid_right_output;
+            }
+            break;
+        
+        default:
+            left_output = 0;
+            right_output = 0; 
+            break;
     }
-
-    // Calculate input
-    *pid_left_input = leftEncoder.read() * DRIVE_IN_PER_ENCODER;
-    *pid_right_input = rightEncoder.read() * DRIVE_IN_PER_ENCODER;
-
-    // Calculate setpoint
-    // Turning
-    if (path[path_head].r_inches == 0) {
-        *pid_left_setpoint =  path[path_head].rads * DRIVE_IN_CENTER_TO_WHEEL;
-        *pid_right_setpoint = -1 * path[path_head].rads * DRIVE_IN_CENTER_TO_WHEEL;
-    } else {
-        *pid_left_setpoint = path[path_head].r_inches;
-        *pid_right_setpoint = path[path_head].r_inches;
-    }
-
-    // Update output
-    pid_left.run();
-    pid_right.run();
-
-    // Serial.print("Dest L: ");
-    // Serial.println(destination_left);
-    // Serial.print("Dest R: ");
-    // Serial.println(destination_right);
-
-    // // Calculate Error
-    // double error_left  = destination_left -  leftEncoder.read() * IN_PER_ENCODER;
-    // double error_right = destination_right - rightEncoder.read() * IN_PER_ENCODER;
-
-    // // Deadzoning error
-    // if (error_left < ERROR_DEAD_ZONE) {
-    //     error_left = 0;
-    // }
-    // if (error_right < ERROR_DEAD_ZONE) {
-    //     error_right = 0;
-    // }
-
-    // // Update Integrator
-    // I_left_accumilator += KI_LEFT * error_left;
-    // I_right_accumilator += KI_RIGHT * error_right;
-
-    // if (error_left == 0) {
-    //     I_left_accumilator = 0;
-    // }
-
-    // if (error_right == 0) {
-    //     I_right_accumilator = 0;
-    // }
-    // // Serial.println(error_left);
-    // // Serial.println(error_right);
-
-    // // PI calculation 
-    // left_output = KP_LEFT * error_left + I_left_accumilator;
-    // right_output = KP_RIGHT * error_right + I_right_accumilator;
-
-    // // Serial.println(left_output);
-    // // Serial.println(right_output);
 
     // // Motor fault handling
     // // if (driveMD.getM1Fault() || driveMD.getM2Fault()) {
@@ -195,41 +221,115 @@ void DriveController::UpdateOutput() {
     // //     Serial.println("Fault");
     // // }
 
-    // // Power limit handling
-    // if (driveMD.getM1CurrentMilliamps() > MAX_MILLIAMPS || driveMD.getM2CurrentMilliamps() > MAX_MILLIAMPS) {
-    //     over_power_accumilator++;
-    // } else if (over_power_accumilator > 1){
-    //     over_power_accumilator--;
-    // }
+    // Power limit handling
+    if ((driveMD.getM1CurrentMilliamps() > DRIVE_MAX_MILLIAMPS) || (driveMD.getM2CurrentMilliamps() > DRIVE_MAX_MILLIAMPS)) {
+        over_power_accumilator++;
+    } else if (over_power_accumilator > 1){
+        over_power_accumilator--;
+    }
 
-    // left_output /= over_power_accumilator;
-    // right_output /= over_power_accumilator;
+    left_output /= over_power_accumilator;
+    right_output /= over_power_accumilator;
 
     // // Serial.println(left_output);
     // // Serial.println(right_output);
     // // Serial.println();
 
-    // // Speed limiting
-    // left_output  = (left_output <= MAX_SPEED)  ? left_output  : MAX_SPEED;
-    // right_output = (right_output <= MAX_SPEED) ? right_output : MAX_SPEED;
+    // Set motor speeds
+    SetLeft(left_output);
+    SetRight(right_output);
+}
 
-    // // Dead zoning
+void DriveController::IrregularUpdate(unsigned long lose_period_ms) {
+    // Check if update is needed
+    if ((millis() - last_irregular_update_ms) < lose_period_ms) {
+        return;
+    }
+
+    switch (drive_mode) {
+        case DRIVE_MODE_PATH:
+            CalculateNextPath();
+            break;
+        
+        default:
+            break;
+    }
+}
+
+
+void DriveController::SetMode(uint8_t mode) {
+    switch (mode)
+    {
+    case DRIVE_MODE_MANUAL:
+        drive_mode = DRIVE_MODE_MANUAL;
+        break;
+
+    case DRIVE_MODE_PATH:
+        drive_mode = DRIVE_MODE_PATH;
+        break;
+
+    default:
+        break;
+    }
+}
+
+// ---- Private Methods --------------------
+void DriveController::SetLeft(int8_t speed) {
+    // Dead zoning
     // if (left_output <= SPEED_DEAD_ZONE && left_output >= (-1 * SPEED_DEAD_ZONE)) {
     //     left_output = 0;
     // }
+
+    // Disable once
+    if (speed == 0 && !left_disabled) {
+        left_output = 0;
+        left_disabled = true;
+        driveMD.setM1Speed(0);
+        driveMD.disableM1Driver();
+        return;
+    } 
+
+    // Re-enable once
+    if (left_disabled) {
+        driveMD.enableM1Driver();
+        left_disabled = false;
+    }
+
+    // Speed limiting
+    left_output  = (speed > DRIVE_MAX_SPEED)  ? DRIVE_MAX_SPEED : ((speed < DRIVE_MIN_SPEED) ? DRIVE_MIN_SPEED : left_output);
+
+    // Set output
+    driveMD.setM1Speed(left_output);
+}
+
+void DriveController::SetRight(int8_t speed) {
+    // Dead zoning
     // if (right_output <= SPEED_DEAD_ZONE && right_output >= (-1 * SPEED_DEAD_ZONE)) {
     //     right_output = 0;
     // }
 
-    // Set output
-    if (*pid_left_output == 0 && *pid_right_output == 0) {
-        driveMD.disableDrivers();
-    } else {
-        driveMD.enableDrivers();
-        driveMD.setSpeeds(*pid_right_output, *pid_left_output);
+    // Disable once
+    if (speed == 0 && !right_disabled) {
+        right_output = 0;
+        right_disabled = true;
+        driveMD.setM2Speed(0);
+        driveMD.disableM2Driver();
+        return;
+    } 
+
+    // Re-enable once
+    if (right_disabled) {
+        driveMD.enableM2Driver();
+        right_disabled = false;
     }
 
+    // Speed limiting
+    right_output  = (speed > DRIVE_MAX_SPEED)  ? DRIVE_MAX_SPEED : ((speed < DRIVE_MIN_SPEED) ? DRIVE_MIN_SPEED : right_output);
+
+    // Set output
+    driveMD.setM2Speed(right_output);
 }
+
 
 /**
  * @brief Calculate next path to follow if reached previous direction
@@ -238,15 +338,18 @@ void DriveController::UpdateOutput() {
  * @return false if still executing last path
  */
 bool DriveController::CalculateNextPath() {
-    if (path_head == path_tail) {
+    // Check if at set point
+    if (pid_left->atSetPoint(DRIVE_SETPOINT_DEAD_ZONE) && pid_right->atSetPoint(DRIVE_SETPOINT_DEAD_ZONE)) {
+        
+        // Check if next path available to move to
+        if (path_head != path_tail) {
+            Serial.print("Passing ");
+            Serial.println(path_head);
+            path_head = (path_head == (DRIVE_PATH_BUFFER_SIZE - 1)) ? 0 : (path_head + 1);
+            leftEncoder.write(0);
+            rightEncoder.write(0);
+        }
 
-        return false;
-    }
-
-    if (*pid_left_output == 0) {
-        path_head = (path_head == PATH_BUFFER_SIZE - 1) ? 0 : path_head + 1;
-        leftEncoder.write(0);
-        rightEncoder.write(0);
         return true;
     }
 
