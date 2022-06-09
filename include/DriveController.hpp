@@ -35,17 +35,17 @@
 
 #define DRIVE_PATH_BUFFER_SIZE 10
 
-#define DRIVE_MAX_MILLIAMPS 1000.0f
-#define DRIVE_MAX_SPEED     300
-#define DRIVE_MIN_SPEED     -300
+#define DRIVE_MAX_MILLIAMPS 4000.0f
+#define DRIVE_MAX_SPEED     150
+#define DRIVE_MIN_SPEED     -150
 
 #define DRIVE_LEFT_KP 0.2
 #define DRIVE_LEFT_KI 0.0
-#define DRIVE_LEFT_KD -10000.0
+#define DRIVE_LEFT_KD -23000.0
 
 #define DRIVE_RIGHT_KP 0.2
 #define DRIVE_RIGHT_KI 0.0
-#define DRIVE_RIGHT_KD -10000.0
+#define DRIVE_RIGHT_KD -23000.0
 
 #define DRIVE_SPEED_DEAD_ZONE 50
 #define DRIVE_ERROR_DEAD_ZONE 0.1                           // Inches
@@ -73,7 +73,9 @@ class DriveController {
         static void SetMode(uint8_t mode);
 
         // ---- Manual Control Mode --------
-        static void ManualMove(int8_t left_speed, int8_t right_speed);
+        static void ManualMove(int left_speed, int right_speed);
+        static void ManualLeftMove(int speed);
+        static void ManualRightMove(int speed);
 
         // ---- PID Path Control Mode ------
         /** @brief Adds point to path. Note: Robot faces Y-axis
@@ -120,15 +122,15 @@ class DriveController {
 
         // ---- Polulu motor driver --------
         static DualTB9051FTGMotorShield driveMD; 
-        static int8_t left_output;
-        static int8_t right_output;
+        static int left_output;
+        static int right_output;
 
         // ---- Encoders -------------------
         static Encoder leftEncoder;
         static Encoder rightEncoder;
 
-        static void SetLeft(int8_t speed);
-        static void SetRight(int8_t speed);
+        static void SetLeft(int speed);
+        static void SetRight(int speed);
 
         /** @brief Calculates next steps and new setpoints, can be called slower */
         static bool CalculateNextPath();

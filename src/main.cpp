@@ -48,11 +48,7 @@ void setup() {
     interrupts();
 
     DriveController::Init();
-    // DriveController::driveMD.setSpeeds(100, 100);
-    // DriveController::driveMD.setM1Speed(100);
-    // DriveController::driveMD.setM2Speed(100);
-    // DriveController::driveMD.enableDrivers();
-    
+    DriveController::SetMode(DRIVE_MODE_PATH);
 
     // Initial path setup
     // driveController.driveMD.setM1Speed(200);
@@ -111,8 +107,8 @@ void handleCommand(String command) {
 
         // Setspeed command for manual mode formatted as "s:#left# #right#" 
         case 's': 
-            {   
-                uint8_t space_loc = command.indexOf(' ');
+            {
+                uint8_t space_loc = command.lastIndexOf(' ');
 
                 if (space_loc == -1) {
                     return;
@@ -123,6 +119,21 @@ void handleCommand(String command) {
                     command.substring(space_loc).toInt());
             }
             break;
+
+        case 'l':
+            {
+               DriveController::ManualLeftMove(
+                    command.substring(command.indexOf('l')+2).toInt()); 
+            }
+            break;
+        
+        case 'r':
+            {
+               DriveController::ManualRightMove(
+                    command.substring(command.indexOf('r')+2).toInt()); 
+            }
+            break;
+
 
         default:
             break;
@@ -146,7 +157,7 @@ void loop() {
     }
 
     // Update Drive Controller
-    DriveController::IrregularUpdate();
+    DriveController::IrregularUpdate(1000);
 
 
 

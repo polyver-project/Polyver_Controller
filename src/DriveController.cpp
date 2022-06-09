@@ -38,8 +38,8 @@ bool DriveController::left_disabled = false;
 bool DriveController::right_disabled = false;
 
 DualTB9051FTGMotorShield DriveController::driveMD;
-int8_t DriveController::left_output = 0;
-int8_t DriveController::right_output = 0;
+int DriveController::left_output = 0;
+int DriveController::right_output = 0;
 
 Encoder DriveController::leftEncoder(DRIVE_LEFT_PIN_A, DRIVE_LEFT_PIN_B);
 Encoder DriveController::rightEncoder(DRIVE_RIGHT_PIN_A, DRIVE_RIGHT_PIN_B);
@@ -98,7 +98,7 @@ void DriveController::Kill() {
     drive_mode = DRIVE_MODE_MANUAL;
 }
 
-void DriveController::ManualMove(int8_t left_speed, int8_t right_speed) {
+void DriveController::ManualMove(int left_speed, int right_speed) {
     if (drive_mode != DRIVE_MODE_MANUAL) {
         return;
     }
@@ -109,6 +109,30 @@ void DriveController::ManualMove(int8_t left_speed, int8_t right_speed) {
     // Set output
     left_output = left_speed;
     right_output = right_speed;
+}
+
+void DriveController::ManualLeftMove(int speed) {
+    if (drive_mode != DRIVE_MODE_MANUAL) {
+        return;
+    }
+
+    // Update watch dog timer
+    last_manual_speed_update_ms = millis();
+
+    // Set output
+    left_output = speed;
+}
+
+void DriveController::ManualRightMove(int speed) {
+    if (drive_mode != DRIVE_MODE_MANUAL) {
+        return;
+    }
+
+    // Update watch dog timer
+    last_manual_speed_update_ms = millis();
+
+    // Set output
+    right_output = speed;
 }
 
 void DriveController::Move(int8_t delta_x, int8_t delta_y) {
@@ -213,6 +237,13 @@ void DriveController::StrictUpdate() {
             break;
     }
 
+    // Just disable and return if not moving
+    if (left_output == 0 && right_output == 0) {
+        SetLeft(0);
+        SetRight(0);
+        return;
+    }
+
     // // Motor fault handling
     // // if (driveMD.getM1Fault() || driveMD.getM2Fault()) {
     // //     left_output = 0;
@@ -245,6 +276,7 @@ void DriveController::IrregularUpdate(unsigned long lose_period_ms) {
     if ((millis() - last_irregular_update_ms) < lose_period_ms) {
         return;
     }
+    
 
     switch (drive_mode) {
         case DRIVE_MODE_PATH:
@@ -254,6 +286,9 @@ void DriveController::IrregularUpdate(unsigned long lose_period_ms) {
         default:
             break;
     }
+    
+    // Lastly, update "timer"
+    last_irregular_update_ms = millis();
 }
 
 
@@ -262,10 +297,12 @@ void DriveController::SetMode(uint8_t mode) {
     {
     case DRIVE_MODE_MANUAL:
         drive_mode = DRIVE_MODE_MANUAL;
+        Serial.println("Manual mode");
         break;
 
     case DRIVE_MODE_PATH:
         drive_mode = DRIVE_MODE_PATH;
+        Serial.println("Path Follower mode");
         break;
 
     default:
@@ -274,14 +311,19 @@ void DriveController::SetMode(uint8_t mode) {
 }
 
 // ---- Private Methods --------------------
-void DriveController::SetLeft(int8_t speed) {
+void DriveController::SetLeft(int speed) {
     // Dead zoning
     // if (left_output <= SPEED_DEAD_ZONE && left_output >= (-1 * SPEED_DEAD_ZONE)) {
     //     left_output = 0;
     // }
 
+    // No action needed
+    if (speed == 0 && left_disabled) {
+        return;
+    }
+
     // Disable once
-    if (speed == 0 && !left_disabled) {
+    if (speed == 0) {
         left_output = 0;
         left_disabled = true;
         driveMD.setM1Speed(0);
@@ -302,14 +344,19 @@ void DriveController::SetLeft(int8_t speed) {
     driveMD.setM1Speed(left_output);
 }
 
-void DriveController::SetRight(int8_t speed) {
+void DriveController::SetRight(int speed) {
     // Dead zoning
     // if (right_output <= SPEED_DEAD_ZONE && right_output >= (-1 * SPEED_DEAD_ZONE)) {
     //     right_output = 0;
     // }
 
+    // No action needed
+    if (speed == 0 && right_disabled) {
+        return;
+    }
+
     // Disable once
-    if (speed == 0 && !right_disabled) {
+    if (speed == 0) {
         right_output = 0;
         right_disabled = true;
         driveMD.setM2Speed(0);
