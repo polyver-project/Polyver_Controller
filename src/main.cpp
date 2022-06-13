@@ -11,11 +11,15 @@
 
 #include <Arduino.h>
 #include <Encoder.h>
+#include <TinyGPSPlus.h>
 
 #include <DriveController.hpp>
 
 // ---- Globals ----------------------------
 String command;
+TinyGPSPlus gps_decoder;
+float lat, lon;
+unsigned long last_gps_update = 0;
 
 // ---- Setup Functions --------------------
 ISR(TIMER3_COMPA_vect) {
@@ -54,6 +58,9 @@ void setup() {
     // driveController.driveMD.setM1Speed(200);
     // DriveController::driveMD->setSpeeds(200, 0);
     // analogWrite(9, 50);
+
+
+    Serial3.begin(9600);
 }
 
 // ---- Command parser ---------------------
@@ -145,10 +152,6 @@ void handleCommand(String command) {
 }
 
 // ---- Main entry -------------------------
-
-long x = 0;
-uint32_t last_path_head = 0;
-
 void loop() {
     // Command handling
     if (buildCommand()) {
@@ -159,12 +162,21 @@ void loop() {
     // Update Drive Controller
     DriveController::IrregularUpdate(1000);
 
+    // GPS data
+    if (Serial3.available()) {
+        int inByte = Serial3.read();
+        gps_decoder.encode(inByte);
 
+        if (gps_decoder.location.isValid() && ((millis() - last_gps_update) > 5000)) {
+            Serial.print("lat,");
+            Serial.print(gps_decoder.location.lat(), 6);
+            Serial.print(F(",lon,"));
+            Serial.print(gps_decoder.location.lng(), 6);
+            Serial.println();
 
-
-
-
-
+            last_gps_update = millis();
+        }
+    }
 
 
     // ---- Safety Monitoring --------------
